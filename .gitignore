@@ -6,3 +6,5 @@ certs/
 __pycache__/
 *.pyc
 WALKTHROUGH.md
+.mcp.json
+scripts/write_claude_desktop_config.py

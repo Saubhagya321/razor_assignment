@@ -2,7 +2,7 @@
 
 This guide sets up a local WooCommerce store (WordPress + WooCommerce + MySQL, behind an HTTPS proxy) so the connector in `SPEC.md` can be developed against a real store. Use fake data only.
 
-Items marked **[VERIFY]** come from general knowledge, not from a checked source. Confirm them when you reach them.
+Items marked **[VERIFY]** come from general knowledge, not from a checked source, at the time this guide was written. Confirm them when you reach them if you hit trouble — most have since been confirmed empirically by actually standing up this stack end to end (see the notes next to each item).
 
 ---
 
@@ -96,7 +96,7 @@ volumes:
 
 Notes:
 - `$$` is Docker Compose's escape for a literal `$`. Single `$` would be treated as a variable and break the PHP snippet.
-- The `WORDPRESS_CONFIG_EXTRA` setting and the proxy-header snippet are what make WordPress treat requests as HTTPS behind the proxy. **[VERIFY]** against the official `wordpress` image documentation if the site redirects in a loop.
+- The `WORDPRESS_CONFIG_EXTRA` setting and the proxy-header snippet are what make WordPress treat requests as HTTPS behind the proxy. **Confirmed**: this stack is up and `scripts/smoke_real.py` completed successfully against it over `https://localhost:8443` with no redirect loop.
 - WordPress is deliberately not published on its own port; everything goes through the proxy, so the site URL is `https://localhost:8443` from the very first run. Changing a WordPress site URL later is fiddly.
 
 ### 1.4 `Caddyfile`
@@ -141,7 +141,7 @@ mkdir -p certs
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt certs/caddy-root.crt
 ```
 
-**[VERIFY]** the path if the copy fails (list `/data/caddy/pki` inside the container).
+If the copy fails, list `/data/caddy/pki` inside the container to find the current path — confirmed working at this path on this setup.
 
 For the browser, you can either click through the certificate warning for `localhost:8443` or add `certs/caddy-root.crt` to your system's trusted certificates.
 
@@ -151,7 +151,7 @@ For the browser, you can either click through the certificate warning for `local
 
 1. Open `https://localhost:8443`. Complete the WordPress setup wizard: site title, admin username, and a made-up local-only admin password, plus an email address (any placeholder).
 2. In the admin: **Plugins -> Add New**, search **WooCommerce**, **Install**, **Activate**. You can skip WooCommerce's setup wizard (no payments or shipping needed).
-3. **Settings -> Permalinks**: choose **Post name** (not "Plain"), then **Save**. As far as I know, pretty permalinks are needed for the `/wp-json/` routes to work. **[VERIFY]**
+3. **Settings -> Permalinks**: choose **Post name** (not "Plain"), then **Save**. **Confirmed**: pretty permalinks are required for the `/wp-json/` routes to resolve — the real store's `/wp-json/wc/v3/...` endpoints only worked after this step.
 
 ### 3.1 Check the API routes exist
 

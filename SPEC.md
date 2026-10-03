@@ -39,7 +39,7 @@ Agent host -> MCP client -> [ MCP server (this repo) ] -> WooCommerce REST API
 
 **One codebase, two backends.** The mock-vs-real choice lives **only in the base URL** the HTTP client uses. There must be no `if mock:` branch in tool code. Otherwise the tests would exercise different code than production runs.
 
-**stdio rule [VERIFY in the transport spec]:** with the stdio transport, stdout carries only MCP protocol messages. Never use `print()` or any logger that writes to stdout. All logs go to **stderr**. A stray stdout write can corrupt the protocol stream and break the host connection.
+**stdio rule (confirmed):** with the stdio transport, stdout carries only MCP protocol messages. Never use `print()` or any logger that writes to stdout. All logs go to **stderr**. A stray stdout write can corrupt the protocol stream and break the host connection. Proven end-to-end against a real subprocess by `tests/test_stdio_protocol.py`.
 
 ---
 
@@ -71,11 +71,11 @@ Rules:
 
 All tools are read-only. Descriptions are written for the model: purpose, **when to use this vs. the sibling tool**, what is returned, and one example call.
 
-**Annotations on every tool [VERIFY against the spec version your SDK targets]:**
+**Annotations on every tool (confirmed against the installed `mcp` SDK, see `tests/test_server_protocol.py::test_tool_annotations_present_on_every_tool`):**
 `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: true` (it talks to an external system), plus a human-readable `title`.
 These are **hints only**. The MCP spec says clients should treat annotations as untrusted unless the server is trusted, so they do not replace enforcement. The real enforcement is the Read-only API key.
 
-**Structured output:** declare an `outputSchema` per tool and return results as `structuredContent` (an object, never a bare list), with the same JSON also serialized in a text content block for older clients. Pin the SDK version and record in the README which MCP spec revision you targeted. **[VERIFY]** how your SDK version generates `outputSchema` from return types. Error results do not carry `structuredContent` (see section 6).
+**Structured output:** declare an `outputSchema` per tool and return results as `structuredContent` (an object, never a bare list), with the same JSON also serialized in a text content block for older clients. Pin the SDK version (`mcp[cli]<2`, see `requirements.txt`). **Confirmed**: FastMCP auto-generates `outputSchema` from the tool's return type annotation, and `structuredContent` is validated against it on every successful call (`tests/test_server_protocol.py::test_successful_results_are_not_errors_and_match_output_schema`; drift from `docs/tool-spec.json` is caught by `tests/test_tool_spec_matches_server.py`). Error results do not carry `structuredContent` (see section 6).
 
 ### 4.1 `list_orders`
 **Purpose:** Browse the most recent orders with no conditions.
@@ -105,7 +105,7 @@ These are **hints only**. The MCP spec says clients should treat annotations as 
 - **All-or-nothing:** `search_orders` may make up to two upstream calls (customer lookup by email, then the orders call). If any call fails after its retries, return one `isError: true` result and **discard** the results of the calls that succeeded. Never return a partial result as if it were complete. The error message says the search is incomplete and no results are included, without PII. Result size is a separate concern, handled by the page-size cap and `has_more`.
 - **One shared deadline:** the total time budget (`WC_MAX_TOTAL_WAIT_SECONDS`) starts when the tool call starts and is shared by every upstream call inside it. It is not reset per request.
 - **Guest checkout (confirmed):** the orders reference says `customer_id` is `0` for guests, so filtering by customer misses guest orders. State this limitation in the tool description and the doc.
-- **Orders filters (confirmed in the reference):** `status` is an **array**, so "open" is **one** upstream call with `pending, processing, on-hold`; `customer` takes an integer customer id. There is no email filter on orders. **[VERIFY empirically]** how the array is encoded in the URL (`status=a,b` vs `status[]=a&status[]=b`) against the local store; the mock must use whichever form the real store accepts.
+- **Orders filters (confirmed in the reference):** `status` is an **array**, so "open" is **one** upstream call with `pending, processing, on-hold`; `customer` takes an integer customer id. There is no email filter on orders. **Encoding confirmed empirically** (see section 4.5): both `status=a,b` and `status[]=a&status[]=b` are accepted and return identical results; the mock accepts both forms.
 
 **Description (draft):**
 > Finds orders by condition: status and/or customer. Use this when the request includes a condition ("open orders for customer X"). For browsing recent orders with no condition, use `list_orders`. "open" means pending, processing, or on-hold. Customers can be given by id or by email; guest orders may not be matched to a customer. Returns up to 20 order summaries per page plus `has_more`. Example: `search_orders(status="open", customer_email="a@example.com")`.
@@ -310,10 +310,10 @@ Reproduce **only what the connector depends on**:
 ## 11. Real-store path (primary; must be reproducible from the repo)
 
 - `docker-compose.yml`: WordPress + MySQL; install the WooCommerce plugin
-- Enable pretty permalinks so `/wp-json/` routes work **[VERIFY]**
+- Enable pretty permalinks so `/wp-json/` routes work (confirmed — see INSTALL.md section 3)
 - Create a **Read-only** REST API key (WooCommerce -> Settings -> Advanced -> REST API)
 - `scripts/seed_store.py`: ~10 fake customers and ~20 orders across statuses (fake data only)
-- HTTPS: Basic Auth on a real store needs HTTPS. Options: local reverse proxy with a local cert, or a tunnel (ngrok / cloudflared). WordPress may need to recognize the proxied request as HTTPS (`X-Forwarded-Proto`) **[VERIFY]**
+- HTTPS: Basic Auth on a real store needs HTTPS. Options: local reverse proxy with a local cert, or a tunnel (ngrok / cloudflared). WordPress needs to recognize the proxied request as HTTPS (`X-Forwarded-Proto`) — confirmed working via the Caddy proxy + `WORDPRESS_CONFIG_EXTRA` setup in INSTALL.md
 - Stretch (only if time remains): OAuth 1.0a for plain HTTP. Note that WooCommerce's usage is a request-signing scheme with no user-consent step, so it may not count as a full OAuth flow
 
 ---

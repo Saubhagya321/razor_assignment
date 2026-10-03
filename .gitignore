@@ -5,3 +5,4 @@ certs/
 .claude
 __pycache__/
 *.pyc
+WALKTHROUGH.md

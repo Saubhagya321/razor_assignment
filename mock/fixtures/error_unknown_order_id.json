@@ -1,0 +1,10 @@
+{
+  "status": 404,
+  "body": {
+    "code": "woocommerce_rest_shop_order_invalid_id",
+    "message": "Invalid ID.",
+    "data": {
+      "status": 404
+    }
+  }
+}

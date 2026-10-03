@@ -1,0 +1,20 @@
+{
+  "status": 400,
+  "body": {
+    "code": "rest_invalid_param",
+    "message": "Invalid parameter(s): status",
+    "data": {
+      "status": 400,
+      "params": {
+        "status": "status[0] is not one of any, trash, auto-draft, pending, processing, on-hold, completed, cancelled, refunded, failed, and checkout-draft."
+      },
+      "details": {
+        "status": {
+          "code": "rest_not_in_enum",
+          "message": "status[0] is not one of any, trash, auto-draft, pending, processing, on-hold, completed, cancelled, refunded, failed, and checkout-draft.",
+          "data": null
+        }
+      }
+    }
+  }
+}

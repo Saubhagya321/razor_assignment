@@ -1,0 +1,10 @@
+{
+  "status": 401,
+  "body": {
+    "code": "woocommerce_rest_authentication_error",
+    "message": "The API key provided does not have write permissions.",
+    "data": {
+      "status": 401
+    }
+  }
+}

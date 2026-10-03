@@ -13,7 +13,7 @@ custom per-request headers (and must not grow mock-specific code just to
 support this), so a header-based switch would only ever be reachable from a
 test that talks to this FastAPI app directly, never through the real
 connector. A reviewer running the mock standalone (`python -m mock.app`)
-can `curl -X POST http://127.0.0.1:8800/__mock/config -d '{"fail": "429",
+can `curl -X POST http://127.0.0.1:8080/__mock/config -d '{"fail": "429",
 "times": 3, "retry_after": 2}'` and then exercise the real connector/tools
 end to end against it -- no code changes to src/ required.
 """
@@ -244,4 +244,4 @@ async def list_customers(request: Request):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8800)
+    uvicorn.run(app, host="127.0.0.1", port=8080)

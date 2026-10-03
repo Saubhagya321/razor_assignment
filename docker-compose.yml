@@ -1,0 +1,35 @@
+services:
+  db:
+    image: mysql:8
+    env_file: docker.env
+    volumes:
+      - db_data:/var/lib/mysql
+    restart: unless-stopped
+
+  wordpress:
+    image: wordpress:latest
+    depends_on: [db]
+    env_file: docker.env
+    environment:
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_HOME', 'https://localhost:8443');
+        define('WP_SITEURL', 'https://localhost:8443');
+        if (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($$_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) { $$_SERVER['HTTPS'] = 'on'; }
+    volumes:
+      - wp_data:/var/www/html
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on: [wordpress]
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  wp_data:
+  caddy_data:

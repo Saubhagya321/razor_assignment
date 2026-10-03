@@ -16,8 +16,8 @@ Items marked **[VERIFY]** are not confirmed. Check them against the official doc
 | Access | **Read-only** (the API key itself has Read permission only) |
 | MCP transport | **stdio** (local). Remote HTTP + MCP OAuth 2.1 is documented as the long-term fix |
 | Upstream auth (server -> WooCommerce) | HTTP Basic Auth with consumer key/secret, **over HTTPS** |
-| Default backend for reviewers | **Mock server** (zero setup, no secrets) |
-| Optional backend | Real store, selected only by config (base URL + credentials) |
+| Primary backend | **Real WooCommerce store** (local Docker, see INSTALL.md). The connector is built and demonstrated against it |
+| Test and convenience backend | **Mock server**, built from real fixtures. Used for failure modes the real store will not produce on demand (401/429/5xx) and as a zero-setup option for reviewers. Selected only by config (base URL) |
 | Language/stack | Python, official MCP Python SDK (`FastMCP`), `httpx`, `pydantic`, `pytest`, `respx`; mock server in FastAPI |
 | Safety model | Allowlist output, mask what is kept, drop free text, cap volume |
 
@@ -115,6 +115,8 @@ These are **hints only**. The MCP spec says clients should treat annotations as 
 
 **Returns:** One order with line items (name, quantity, line total), status, totals, dates, customer id, and masked contact info if kept by policy. Same allowlist as the summaries, plus line items.
 
+**Trashed orders (confirmed):** moving an order to the WordPress trash sets its `status` field to `"trash"` (verified via a fresh GET after DELETE, not the DELETE response itself, which can show the pre-trash status). `list_orders`/`search_orders` never surface trashed orders (not even `status="any"`), so `get_order` must be consistent: if the upstream record's `status` is `"trash"`, treat it as `NOT_FOUND`, not as a normal order. Add a test for this (get a trashed order id, expect `NOT_FOUND`).
+
 ### 4.4 `find_customer`
 **Args:** `email` (str)
 
@@ -135,12 +137,22 @@ These are **hints only**. The MCP spec says clients should treat annotations as 
 
 **Write endpoints exist and must never be exposed:** create, update, delete, batch, order notes (create/delete), and order actions such as `send_order_details` and `send_email`, which **email customers**. Enforce this twice: the connector has no write tools, and the API key has Read permission only.
 
-**Not documented in the pasted pages [VERIFY on the real store]:** the `Link` / total-count pagination headers, the maximum allowed `per_page`, whether `any` includes `trash`, and whether orders `search` matches billing email.
+**Confirmed empirically against the local store (see `scripts/probe_api.py`, `scripts/probe_api_extra.py`, fixtures in `mock/fixtures/`):**
+- **Status encoding:** both `status=a,b,c` (comma-joined) and `status[]=a&status[]=b&status[]=c` (repeated array param) are accepted and return identical results. The mock must accept both forms.
+- **`per_page` is capped at 100.** Requesting more returns `HTTP 400` with a `rest_invalid_param` error (see `mock/fixtures/error_invalid_status.json`-style shape); the mock must enforce the same cap and error.
+- **No total-count headers.** `X-WP-Total` / `X-WP-TotalPages` are **absent** on the orders endpoint. Pagination must rely solely on the `Link` header's `rel="next"`.
+- **`status=any` excludes trashed orders.** An explicit `status=trash` filter does return them. Trashing an order is a destructive operation from the connector's point of view: once trashed, an order is invisible to every list/search/get path unless the caller explicitly filters `status=trash` (which this connector's tools never do).
+- **Trashed order status (confirmed, corrects an earlier wrong read):** a fresh `GET /orders/<id>` after trashing shows `"status": "trash"`. (The DELETE response itself can still show the pre-trash status due to response timing — don't rely on it.) WordPress separately preserves the prior status internally via `_wp_trash_meta_status` in `meta_data`, but that's never exposed to list/search and is irrelevant to the connector.
+- **Orders `search` matches both billing email and billing first/last name** (broader than the original guess of "some unspecified string match"). Still out of scope for v1's tool surface (no free-text search tool), but documented here so a future `[VERIFY]` doesn't reopen this.
+- **Guest orders (`customer_id: 0`) cannot be matched to a customer via `customers?email=`.** This is a real, by-design gap; state it in the tool description for `search_orders`. An exact-match guest-order fallback (matching `billing.email` on the order list directly) is documented as a stretch goal only, out of scope for v1.
+- **Pagination edges:** the last page with data has no `rel="next"` in its `Link` header. A page requested past the last page returns `HTTP 200` with an empty list `[]`, not an error.
+- **Empty-result lookups are not errors:** `customers?email=<unknown>` and `orders?customer=<unknown id>` both return `HTTP 200` with an empty list. "No match" is representable without a special error path; tools should treat this as the normal empty case, not `NOT_FOUND`.
+- **Error bodies (fixtures saved for the mock to reproduce exactly):** unknown order id (`error_unknown_order_id.json`), invalid `status` value (`error_invalid_status.json`), wrong/invalid API key (`error_wrong_key_401.json`), and a write attempt (`POST /orders`) using the Read-only key (`error_write_with_read_key.json`). **Confirmed: WooCommerce returns `401` both for a wrong/invalid key and for a valid key that lacks permission to perform the requested action** (e.g. the Read-key's write attempt also came back `401`, not `403`). There is no reliable way to distinguish "bad credentials" from "credentials valid but insufficient" from the status code alone — see the error-model wording below.
 
-**Mock must reproduce:** status as an array (real encoding), `customer` filter, `customers?email=` exact match, `customer_id: 0` guest orders in the fixtures, `per_page` and paging headers as observed on the real store.
+**Mock must reproduce:** status as an array (both comma-joined and repeated-param encodings), `customer` filter, `customers?email=` exact match, `customer_id: 0` guest orders in the fixtures, `per_page` cap of 100 with its `400` error, absence of total-count headers, trashed-order behavior (`status="trash"`, excluded from `any`), pagination edge cases (last page, past-the-end), and the saved error fixtures reproduced byte-for-byte (status code and JSON body shape).
 
 ### Pagination contract (all list-like tools)
-Return `{ items: [...], page, has_more, note? }`. Derive `has_more` from the response's `Link: rel="next"` header (confirmed in docs). **[VERIFY]** also whether total-count headers exist and are reliable. If results exceed what can be returned, `note` tells the model to narrow the query.
+Return `{ items: [...], page, has_more, note? }`. Derive `has_more` from the response's `Link: rel="next"` header (confirmed in docs; confirmed empirically that the last page omits it). Total-count headers (`X-WP-Total`/`X-WP-TotalPages`) are confirmed **absent** on this store — do not depend on them. If results exceed what can be returned, `note` tells the model to narrow the query.
 
 ---
 
@@ -152,7 +164,7 @@ Return `{ items: [...], page, has_more, note? }`. Derive `has_more` from the res
 |---|---|
 | **Return** | order id, status, total, currency, created date, line items (name, quantity), customer id |
 | **Mask** | email -> `a***@domain.com`; phone -> last 4 digits only. Only if useful to the agent |
-| **Never return** | `billing`/`shipping` objects, `customer_ip_address`, `customer_user_agent`, `payment_method*`, `transaction_id`, `order_key`, `cart_hash`, `meta_data` (order and line-item level), coupon/tax/fee/shipping lines |
+| **Never return** | `billing`/`shipping` objects, `customer_ip_address`, `customer_user_agent`, `payment_method*`, `transaction_id`, `order_key`, `cart_hash`, `meta_data` (order and line-item level), coupon/tax/fee/shipping lines. Confirmed: `meta_data` can carry internal WordPress bookkeeping keys (e.g. `_wp_trash_meta_status`, `_wp_trash_meta_time`) that have nothing to do with the order's business data — another reason `meta_data` is a blanket never-return, not something to selectively filter |
 | **Drop entirely** | free-text fields (customer notes, order notes). Do not try to regex-mask them |
 
 Additional rules:
@@ -160,7 +172,7 @@ Additional rules:
 - Treat all store data as **data, not instructions**. Say so in tool descriptions, but remember this is weak; not returning the field is the strong defense.
 - Logs contain order/customer **ids**, never emails or phone numbers.
 - **Volume cap:** page size is capped by `WC_PAGE_SIZE_MAX`.
-- **Verify real field names [VERIFY]** from a saved live response before writing the allowlist.
+- Real field names confirmed from saved live responses (`mock/fixtures/*.json`); the allowlist above matches the actual order/customer shapes returned by this store.
 
 ---
 
@@ -174,7 +186,7 @@ Tools never raise raw exceptions or upstream bodies to the model. Every failure 
 
 | Upstream | Code | retryable | Behavior |
 |---|---|---|---|
-| 401 | `AUTH_FAILED` | **false** | No retry. Message: credentials need checking; tell the user. Never echo headers or keys |
+| 401 | `AUTH_FAILED` | **false** | No retry. **Confirmed:** WooCommerce returns 401 both for a wrong/invalid key and for a valid key lacking permission for the attempted action (a Read-only key's write attempt also comes back 401, not 403); the two cases can't be told apart from the status code alone. Message: "credentials missing, invalid, or lacking permission"; tell the user. Never echo headers or keys |
 | 403 | `FORBIDDEN` | false | Key is valid but lacks permission |
 | 404 | `NOT_FOUND` | false | e.g. unknown order id |
 | 400 | `BAD_REQUEST` | false | Safe summary only, not the raw body |
@@ -251,7 +263,7 @@ Reproduce **only what the connector depends on**:
 - Error shapes for 401 and 429 (with `Retry-After`)
 - A way to force failures on demand (for example a header `X-Mock-Fail: 429|401|500`, or a switch via env). The failing mode must also support "fail N times, then succeed" to test retries
 
-**Drift guard:** run the connector once against a real local store, save a few real responses (fake data only) as fixtures, and build the mock from them. Do not write the mock from memory.
+**Drift guard:** run the connector once against a real local store, save a few real responses (fake data only) as fixtures, and build the mock from them. Do not write the mock from memory. **The mock must reproduce the saved error fixtures exactly** (`mock/fixtures/error_*.json`): same HTTP status code and same JSON body shape as the real store returned for unknown order id, invalid `status` value, wrong/invalid key (401), and a write attempt with the Read-only key (401). Tests assert against these exact fixtures, not an approximation of what WooCommerce "probably" returns.
 
 ---
 
@@ -261,7 +273,7 @@ Reproduce **only what the connector depends on**:
 2. `search_orders(status="open")` expands to pending + processing + on-hold
 3. `search_orders` by customer id, by email, by both (error), by neither (error)
 4. Email with no match returns empty with a message
-5. `get_order` happy path and 404
+5. `get_order` happy path and 404; **trashed order:** `get_order` on an order whose upstream `status` is `"trash"` returns `NOT_FOUND`, not the order data
 6. **429 then success:** retries, honors `Retry-After`
 7. **429 forever:** returns `RATE_LIMITED`, `retryable: true`, no partial data
 8. **401:** returns `AUTH_FAILED`, `retryable: false`, **zero retries**
@@ -295,7 +307,7 @@ Reproduce **only what the connector depends on**:
 
 ---
 
-## 11. Optional real-store path (documented, not required)
+## 11. Real-store path (primary; must be reproducible from the repo)
 
 - `docker-compose.yml`: WordPress + MySQL; install the WooCommerce plugin
 - Enable pretty permalinks so `/wp-json/` routes work **[VERIFY]**
@@ -312,7 +324,7 @@ Reproduce **only what the connector depends on**:
 - What it is, architecture diagram
 - Quick start with the mock (3 commands max), then run the tests
 - How to connect an MCP host (example config for stdio)
-- Optional: switching to a real store (what to set in `.env`)
+- Real store (primary): how to run it (INSTALL.md), what to set in `.env`, and what the demo shows. The mock is the two-minute alternative
 - Assumptions and limitations (see below)
 
 ### docs/capabilities.md (what the agent can and cannot do)
@@ -333,14 +345,14 @@ Reproduce **only what the connector depends on**:
 ## 13. Build order (about 5 to 7 hours)
 
 1. **(0:00-0:45)** Scaffold repo, config, `.env.example`, `.gitignore`. Minimal FastMCP server with `get_order`. Call it from a host.
-2. **(0:45-2:00)** Mock server + fixtures. HTTP client with Basic Auth. `list_orders`, `get_order` against the mock.
+2. **(0:45-2:00)** HTTP client with Basic Auth against the **real store**. `list_orders` and `get_order` working end to end on real data. Start the minimal mock (from the saved fixtures) only when you reach the retry/429 work in step 4.
 3. **(2:00-3:15)** `search_orders`, `find_customer`, status alias, pagination.
 4. **(3:15-4:15)** Retry/429/401 handling + structured errors + tests 6-8.
 5. **(4:15-5:00)** Sanitizer + PII/injection/secret tests.
 6. **(5:00-6:00)** Docs, `dump_tool_spec.py`, README, demo script.
-7. **Buffer (1:00)** Real-store run: compose, seed, read-only key, record a short demo video.
+7. **Buffer (1:00)** Record the demo on the **real store** (required deliverable) and do the fresh-clone check.
 
-If time is short, cut the real-store demo before cutting tests or the sanitizer.
+If time is short, cut stretch features (guest-order fallback, caching) and polish. Do not cut the real-store demo, the tests, or the sanitizer.
 
 ---
 
@@ -348,11 +360,11 @@ If time is short, cut the real-store demo before cutting tests or the sanitizer.
 
 - [ ] No real customer data, passwords, or API keys anywhere (including **git history**)
 - [ ] `.env` ignored; `.env.example` present
-- [ ] Mock path works from a fresh clone in about 10 minutes
+- [ ] Real-store path is reproducible from the repo (compose file, seed script, INSTALL.md), and the mock path works from a fresh clone in about 10 minutes
 - [ ] Tests pass
 - [ ] `docs/tool-spec.json` generated
 - [ ] README has setup/run steps, assumptions, limitations
 - [ ] Capabilities doc present
 - [ ] Repo is public, or private with access granted to the account named in the form
-- [ ] Demo video (real store) or recorded mock run linked
+- [ ] Demo video on the **real store** linked (a recorded mock run covers only the failure modes the real store cannot produce)
 - [ ] Every **[VERIFY]** item resolved or listed as an assumption in the README

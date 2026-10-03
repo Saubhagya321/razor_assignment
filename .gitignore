@@ -3,3 +3,5 @@ docker.env
 seed.env
 certs/
 .claude
+__pycache__/
+*.pyc

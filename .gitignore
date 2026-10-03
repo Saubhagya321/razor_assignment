@@ -2,3 +2,4 @@
 docker.env
 seed.env
 certs/
+.claude
